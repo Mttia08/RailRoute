@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <title>Bahn-Router mit Geschwindigkeiten & Fahrzeit</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    crossorigin=""
+  />
+  <style>
+    html, body, #map { height: 100%; margin: 0; }
+    .controls {
+      position: absolute; top: 10px; left: 10px; z-index: 1000;
+      background: white; padding: 8px; border-radius: 6px;
+      box-shadow: 0 2px 8px rgba(0,0,0,.2); font-family: system-ui, sans-serif; font-size: 14px;
+    }
+    .controls button { margin: 4px 0; width: 100%; }
+    .controls .hint { font-size: 12px; color: #555; margin-top: 6px; }
+    #results { margin-top: 8px; font-size: 13px; }
+  </style>
+</head>
+<body>
+<div id="map"></div>
+<div class="controls">
+  <button id="load">Netz laden (Kartenausschnitt)</button>
+  <button id="reset">Reset</button>
+  <button id="download" disabled>Route herunterladen (GeoJSON)</button>
+  <div id="results"></div>
+  <div class="hint">
+    1) Auf Karte zoomen/pannen<br/>
+    2) „Netz laden“<br/>
+    3) Zwei Klicks: Start &amp; Ziel<br/>
+    4) Route erscheint grün
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+<script>
+// -------------------------
+// Parameter für Fahrzeitmodell
+// -------------------------
+const trainLength = 200;   // m
+const accel = 0.5;         // m/s²
+const decel = 0.7;         // m/s²
+const I_normal = 100;       // mm, Fehlbetrag Normalzug
+const I_tilting = 150;     // mm, Fehlbetrag Neigezug
+
+const map = L.map('map').setView([46.76, 7.62], 11);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 19,
+  attribution: '&copy; OpenStreetMap'
+}).addTo(map);
+
+const networkLayer = L.layerGroup().addTo(map);
+let routeLayer = L.polyline([], {weight: 5}).addTo(map);
+let startMarker = null, endMarker = null;
+
+// Graph-Struktur
+const nodes = new Map();
+const adj = new Map();
+let lastPathEdges = [];
+
+// -------------------------
+// Overpass laden und Graph erstellen
+// -------------------------
+async function loadNetworkForBBox() {
+  clearNetwork();
+  const b = map.getBounds();
+  const s = b.getSouth(), w = b.getWest(), n = b.getNorth(), e = b.getEast();
+  const query = `
+[out:json][timeout:60];
+(
+  way["railway"="rail"](${s},${w},${n},${e});
+);
+(._;>;);
+out body;
+  `.trim();
+  const res = await fetch("https://overpass-api.de/api/interpreter", {
+    method: "POST", body: query, headers: {"Content-Type": "text/plain"}
+  });
+  if (!res.ok) { alert("Overpass Fehler: " + res.status); return; }
+  const data = await res.json();
+  buildGraphFromOverpass(data);
+}
+
+function buildGraphFromOverpass(data) {
+  const nodeMap = new Map(), ways = [];
+  for (const el of data.elements) {
+    if (el.type === "node") nodeMap.set(el.id, {lat: el.lat, lon: el.lon});
+  }
+  for (const el of data.elements) {
+    if (el.type === "way" && el.nodes && el.nodes.length > 1) {
+      const tags = el.tags || {};
+      const latlngs = el.nodes.map(id => {
+        const n = nodeMap.get(id);
+        return n ? [n.lat, n.lon] : null;
+      }).filter(Boolean);
+      if (latlngs.length > 1) {
+        L.polyline(latlngs, {weight: 2, opacity: 0.7}).addTo(networkLayer);
+      }
+      ways.push({nodes: el.nodes, tags});
+    }
+  }
+  for (const [id, coord] of nodeMap) {
+    nodes.set(id, coord);
+    if (!adj.has(id)) adj.set(id, []);
+  }
+  for (const way of ways) {
+    for (let i = 0; i < way.nodes.length - 1; i++) {
+      const a = way.nodes[i], b = way.nodes[i+1];
+      const ca = nodes.get(a), cb = nodes.get(b);
+      if (!ca || !cb) continue;
+      const d = haversine(ca.lat, ca.lon, cb.lat, cb.lon);
+      const edge = {to: b, w: d, tags: way.tags};
+      const edgeBack = {to: a, w: d, tags: way.tags};
+      adj.get(a).push(edge);
+      adj.get(b).push(edgeBack);
+    }
+  }
+}
+
+// -------------------------
+// Hilfsfunktionen
+// -------------------------
+function haversine(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const φ1 = lat1*Math.PI/180, φ2 = lat2*Math.PI/180;
+  const dφ = (lat2-lat1)*Math.PI/180;
+  const dλ = (lon2-lon1)*Math.PI/180;
+  const a = Math.sin(dφ/2)**2 + Math.cos(φ1)*Math.cos(φ2)*Math.sin(dλ/2)**2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+function findNearestNode(lat, lon) {
+  let bestId = null, bestDist = Infinity;
+  for (const [id, c] of nodes) {
+    const d = haversine(lat, lon, c.lat, c.lon);
+    if (d < bestDist) { bestDist = d; bestId = id; }
+  }
+  return {id: bestId, dist: bestDist};
+}
+
+// Dijkstra
+function dijkstra(sourceId, targetId) {
+  const dist = new Map(), prev = new Map(), visited = new Set();
+  for (const id of nodes.keys()) dist.set(id, Infinity);
+  dist.set(sourceId, 0);
+
+  while (visited.size < nodes.size) {
+    let u = null, best = Infinity;
+    for (const [id, d] of dist) {
+      if (!visited.has(id) && d < best) { best = d; u = id; }
+    }
+    if (u === null) break;
+    if (u === targetId) break;
+    visited.add(u);
+
+    for (const edge of adj.get(u) || []) {
+      const v = edge.to;
+      if (visited.has(v)) continue;
+      const alt = dist.get(u) + edge.w;
+      if (alt < dist.get(v)) {
+        dist.set(v, alt);
+        prev.set(v, {u, edge});
+      }
+    }
+  }
+  if (!prev.has(targetId) && sourceId !== targetId) return null;
+
+  const path = [], edges = [];
+  let cur = targetId;
+  path.push(cur);
+  while (cur !== sourceId) {
+    const p = prev.get(cur); if (!p) break;
+    edges.push({from: p.u, to: cur, tags: p.edge.tags, dist: p.edge.w});
+    cur = p.u; path.push(cur);
+  }
+  path.reverse(); edges.reverse();
+  return {path, edges};
+}
+
+// -------------------------
+// Kurvenradius aus drei Punkten
+// -------------------------
+function curveRadius(p1, p2, p3) {
+  const R = 6371000;
+  function toXY(p) {
+    const x = R * p.lon * Math.PI / 180 * Math.cos(p.lat * Math.PI / 180);
+    const y = R * p.lat * Math.PI / 180;
+    return {x, y};
+  }
+  const A = toXY(p1), B = toXY(p2), C = toXY(p3);
+  const a = Math.hypot(B.x - C.x, B.y - C.y);
+  const b = Math.hypot(A.x - C.x, A.y - C.y);
+  const c = Math.hypot(A.x - B.x, A.y - B.y);
+  const s = (a + b + c) / 2;
+  const area = Math.sqrt(s * (s - a) * (s - b) * (s - c));
+  if (area === 0) return Infinity;
+  return (a * b * c) / (4 * area);
+}
+
+// -------------------------
+// Klick-Handler
+// -------------------------
+map.on('click', onMapClick);
+function onMapClick(e) {
+  if (nodes.size === 0) { alert('Bitte zuerst „Netz laden“ klicken.'); return; }
+  const {lat, lng} = e.latlng;
+  const nearest = findNearestNode(lat, lng);
+  if (!nearest.id) return;
+  const snapped = nodes.get(nearest.id);
+
+  if (!startMarker) {
+    startMarker = L.marker([snapped.lat, snapped.lon], {title: 'Start'}).addTo(map);
+  } else if (!endMarker) {
+    endMarker = L.marker([snapped.lat, snapped.lon], {title: 'Ziel'}).addTo(map);
+    computeAndShowRoute();
+  } else {
+    resetRouteOnly();
+    startMarker = L.marker([snapped.lat, snapped.lon], {title: 'Start'}).addTo(map);
+  }
+}
+
+// -------------------------
+// Fahrzeitberechnung
+// -------------------------
+function computeAndShowRoute() {
+  const s = findNearestNode(startMarker.getLatLng().lat, startMarker.getLatLng().lng).id;
+  const t = findNearestNode(endMarker.getLatLng().lat, endMarker.getLatLng().lng).id;
+  const res = dijkstra(s, t);
+  if (!res) { alert('Keine Verbindung gefunden.'); return; }
+  lastPathEdges = res.edges;
+  const coords = res.path.map(id => {
+    const c = nodes.get(id); return [c.lat, c.lon];
+  });
+  routeLayer.setLatLngs(coords).setStyle({color: 'green', weight: 5, opacity: 0.9});
+  document.getElementById('download').disabled = false;
+
+  const times = computeTravelTime(lastPathEdges);
+  document.getElementById('results').innerHTML =
+    `Normalzug: ${(times.normal/60).toFixed(2)} min (${((times.normal/60)*1.2).toFixed(2)} min)<br>` +
+    `Neigezug: ${(times.tilting/60).toFixed(2)} min (${((times.tilting/60)*1.2).toFixed(2)} min)`;
+}
+
+function computeTravelTime(edges) {
+  const feats = edges.map(e => ({
+    dist: e.dist,
+    maxspeed_normal: parseSpeed(e.tags.maxspeed || e.tags["maxspeed:forward"] || e.tags["maxspeed:backward"]),
+    maxspeed_tilting: parseSpeed(e.tags["maxspeed:tilting"])
+  }));
+
+  // Interpolation und Extrapolation normal
+  let vals = feats.map(f => f.maxspeed_normal);
+  let x = vals.map((v,i)=> v==null?NaN:v);
+  let arr = x.slice();
+  let idxs = arr.map((v,i)=>isNaN(v)?null:i).filter(v=>v!=null);
+  let valsClean = idxs.map(i=>arr[i]);
+  for (let i=0;i<arr.length;i++) {
+    if (isNaN(arr[i])) {
+      let lo = Math.max(0, Math.max(...idxs.filter(x=>x<=i)));
+      let hi = Math.min(arr.length-1, Math.min(...idxs.filter(x=>x>=i)));
+      if (isFinite(lo)&&isFinite(hi)&&lo!=hi) {
+        let t=(i-lo)/(hi-lo);
+        arr[i]=valsClean[idxs.indexOf(lo)]*(1-t)+valsClean[idxs.indexOf(hi)]*t;
+      }
+    }
+  }
+  for (let i=0;i<arr.length;i++) if (isNaN(arr[i])) arr[i]=valsClean[0];
+  for (let i=arr.length-1;i>=0;i--) if (isNaN(arr[i])) arr[i]=valsClean[valsClean.length-1];
+  feats.forEach((f,i)=>f.maxspeed_normal=arr[i]);
+  feats.forEach(f=>{ if (!f.maxspeed_tilting) f.maxspeed_tilting=f.maxspeed_normal; });
+
+  // Neigezug Geschwindigkeit basierend auf Radius
+  for (let i = 0; i < edges.length; i++) {
+    let p1 = nodes.get(edges[Math.max(i-1,0)].from);
+    let p2 = nodes.get(edges[i].from);
+    let p3 = nodes.get(edges[Math.min(i+1, edges.length-1)].to);
+    const R = curveRadius(p1, p2, p3);
+    if (!isFinite(R) || R > 1e6) continue;
+
+    const vN = feats[i].maxspeed_normal;
+    if (vN) {
+        // Berechnung: v = sqrt(v_normal^2 + (ΔI * R / 11.8))
+        const vNZ = Math.sqrt(vN*vN + ((I_tilting - I_normal) * R / 11.8));
+        feats[i].maxspeed_tilting = vNZ;  // Überschreibt OSM
+    }
+  }
+
+  const normal = simulate(feats,"maxspeed_normal");
+  const tilting = simulate(feats,"maxspeed_tilting");
+  return {normal, tilting};
+}
+
+function simulate(feats,key) {
+  let v=0, t=0;
+  for (const f of feats) {
+    const vmax=f[key]/3.6, L=f.dist;
+    if (v>vmax) {
+      let dv=v-vmax, tb=dv/decel, db=v*tb-0.5*decel*tb*tb;
+      if (db>L){ tb=2*L/(v+vmax); db=L;}
+      t+=tb; v=vmax; continue;
+    }
+    let dv=vmax-v, ta=dv/accel, da=v*ta+0.5*accel*ta*ta;
+    if (da>L){ let vend=Math.sqrt(v*v+2*accel*L); ta=(vend-v)/accel; t+=ta; v=vend; continue;}
+    t+=ta; v=vmax; let rem=L-da; if (v>0) t+=rem/v;
+  }
+  return t;
+}
+
+// -------------------------
+function parseSpeed(val) {
+  if (!val) return null;
+  const m = String(val).match(/\d+/);
+  return m ? parseInt(m[0]) : null;
+}
+
+// -------------------------
+document.getElementById('load').addEventListener('click', loadNetworkForBBox);
+document.getElementById('reset').addEventListener('click', resetRouteOnly);
+document.getElementById('download').addEventListener('click', downloadRouteAsGeoJSON);
+
+function clearNetwork() { networkLayer.clearLayers(); nodes.clear(); adj.clear(); resetRouteOnly(); }
+function resetRouteOnly() {
+  if (startMarker) { map.removeLayer(startMarker); startMarker=null; }
+  if (endMarker) { map.removeLayer(endMarker); endMarker=null; }
+  routeLayer.setLatLngs([]).setStyle({opacity:0});
+  document.getElementById('download').disabled=true;
+  lastPathEdges=[]; document.getElementById('results').innerHTML="";
+}
+
+function downloadRouteAsGeoJSON() {
+  if (!lastPathEdges.length) return;
+  const features = [];
+  for (const edge of lastPathEdges) {
+    const c1 = nodes.get(edge.from), c2 = nodes.get(edge.to);
+    features.push({
+      type: "Feature",
+      properties: {
+        maxspeed_normal: parseSpeed(edge.tags.maxspeed || edge.tags["maxspeed:forward"] || edge.tags["maxspeed:backward"]),
+        maxspeed_tilting: parseSpeed(edge.tags["maxspeed:tilting"])
+      },
+      geometry: {type:"LineString", coordinates:[[c1.lon,c1.lat],[c2.lon,c2.lat]]}
+    });
+  }
+  const fc={type:"FeatureCollection",features};
+  const blob=new Blob([JSON.stringify(fc,null,2)],{type:"application/geo+json"});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a'); a.href=url; a.download='bahnroute.geojson';
+  document.body.appendChild(a); a.click(); URL.revokeObjectURL(url); a.remove();
+}
+</script>
+</body>
+</html>
