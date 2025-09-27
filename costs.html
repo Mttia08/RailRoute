@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Betriebskosten-Rechner Bahnverbindung (Norwegen)</title>
+<style>
+  body{font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial;line-height:1.4;padding:18px;background:#f7f8fa;color:#111}
+  h1{margin-top:0}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
+  label{display:block;font-weight:600;margin-bottom:6px}
+  input[type="number"]{width:100%;padding:8px;border:1px solid #d6d9de;border-radius:6px}
+  .card{background:#fff;padding:12px;border-radius:10px;border:1px solid #e4e7eb;box-shadow:0 1px 2px rgba(0,0,0,0.03)}
+  button{background:#0b79f7;color:#fff;padding:10px 14px;border-radius:8px;border:0;cursor:pointer;font-weight:700}
+  .muted{color:#58616a;font-size:0.95rem}
+  table{width:100%;border-collapse:collapse;margin-top:8px}
+  th,td{padding:8px;border-bottom:1px solid #eef1f4;text-align:left}
+  .right{text-align:right}
+  .big{font-size:1.2rem;font-weight:700}
+  .flex{display:flex;gap:8px;flex-wrap:wrap}
+</style>
+</head>
+<body>
+  <h1>Betriebskosten-Rechner — Bahnverbindung (Norwegen)</h1>
+  <p class="muted">Jetzt auch mit Ticketpreis und Berechnung der notwendigen Ticketanzahl für Kostendeckung.</p>
+
+  <div class="card">
+    <h2>Strecken & Fahrplan</h2>
+    <div class="grid">
+      <div>
+        <label>Streckenlänge (km)</label>
+        <input id="length_km" type="number" min="0" value="120" step="0.1">
+      </div>
+      <div>
+        <label>Züge pro Tag (pro Richtung)</label>
+        <input id="trains_per_day_per_dir" type="number" min="0" value="10" step="1">
+      </div>
+      <div>
+        <label>Benötigte Züge (Basis, ohne Reserve)</label>
+        <input id="base_trains" type="number" min="0" value="6" step="1">
+      </div>
+      <div>
+        <label>Reserve / Ersatzflotte (%)</label>
+        <input id="spare_ratio" type="number" min="0" value="15" step="1">
+      </div>
+      <div>
+        <label>Ticketpreis (NOK)</label>
+        <input id="ticket_price" type="number" min="0" value="400" step="1">
+      </div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:12px">
+    <h2>Kostenparameter (jährlich / pro Einheit)</h2>
+    <div class="grid">
+      <div>
+        <label>Energieverbrauch (kWh / Zug-km)</label>
+        <input id="kwh_per_km" type="number" min="0" step="0.001" value="3.5">
+      </div>
+      <div>
+        <label>Strompreis (NOK / kWh)</label>
+        <input id="price_kwh" type="number" min="0" step="0.001" value="1.5">
+      </div>
+      <div>
+        <label>Personal (NOK / Zug-km)</label>
+        <input id="staff_per_km" type="number" min="0" step="0.1" value="20">
+        <div class="muted">vereinfacht pro Zug-km</div>
+      </div>
+      <div>
+        <label>Wartung (NOK / Zug-km)</label>
+        <input id="maint_per_km" type="number" min="0" step="0.1" value="2.5">
+      </div>
+      <div>
+        <label>Infrastruktur / Netzzugang (NOK / Zug-km)</label>
+        <input id="infra_per_km" type="number" min="0" step="0.1" value="15">
+      </div>
+      <div>
+        <label>Leasing / Kapitalkosten (NOK / Zug / Jahr)</label>
+        <input id="leasing_per_train" type="number" min="0" step="1" value="4000000">
+      </div>
+      <div>
+        <label>Depot / Standortkosten (NOK / Zug / Jahr)</label>
+        <input id="depot_per_train" type="number" min="0" step="1" value="150000">
+      </div>
+      <div>
+        <label>Reinigung (NOK / Zug / Tag)</label>
+        <input id="cleaning_per_train_day" type="number" min="0" step="1" value="400">
+      </div>
+      <div>
+        <label>Versicherung (% von Leasingkosten)</label>
+        <input id="insurance_pct" type="number" min="0" step="0.1" value="1.5">
+      </div>
+    </div>
+  </div>
+
+  <div style="margin-top:12px" class="flex">
+    <button id="calcBtn">Berechnen</button>
+  </div>
+
+  <div id="result" style="margin-top:14px"></div>
+
+<script>
+function fmt(n){ return n.toLocaleString('de-DE',{maximumFractionDigits:2}); }
+
+function calculate(){
+  const L = parseFloat(document.getElementById('length_km').value) || 0;
+  const trPerDayDir = parseFloat(document.getElementById('trains_per_day_per_dir').value) || 0;
+  const baseTrains = parseFloat(document.getElementById('base_trains').value) || 0;
+  const sparePct = parseFloat(document.getElementById('spare_ratio').value) || 0;
+  const ticketPrice = parseFloat(document.getElementById('ticket_price').value) || 0;
+
+  // Kostenparameter
+  const kwhPerKm = parseFloat(document.getElementById('kwh_per_km').value) || 0;
+  const priceKwh = parseFloat(document.getElementById('price_kwh').value) || 0;
+  const staffPerKm = parseFloat(document.getElementById('staff_per_km').value) || 0;
+  const maintPerKm = parseFloat(document.getElementById('maint_per_km').value) || 0;
+  const infraPerKm = parseFloat(document.getElementById('infra_per_km').value) || 0;
+  const leasingPerTrain = parseFloat(document.getElementById('leasing_per_train').value) || 0;
+  const depotPerTrain = parseFloat(document.getElementById('depot_per_train').value) || 0;
+  const cleaningPerTrainDay = parseFloat(document.getElementById('cleaning_per_train_day').value) || 0;
+  const insurancePct = parseFloat(document.getElementById('insurance_pct').value) || 0;
+
+  // Fahrten
+  const oneWayTripsPerDay = trPerDayDir*2;
+  const dailyTrainKm = oneWayTripsPerDay * L;
+  const annualTrainKm = dailyTrainKm * 365;
+
+  // Flotte
+  const totalTrains = Math.ceil(baseTrains * (1 + sparePct/100));
+
+  // Kosten
+  const energyCost = annualTrainKm * kwhPerKm * priceKwh;
+  const staffCost = annualTrainKm * staffPerKm;
+  const maintCost = annualTrainKm * maintPerKm;
+  const infraCost = annualTrainKm * infraPerKm;
+  const leasingCost = totalTrains * leasingPerTrain;
+  const depotCost = totalTrains * depotPerTrain;
+  const cleaningCost = totalTrains * cleaningPerTrainDay * 365;
+  const insuranceCost = leasingCost * (insurancePct/100);
+
+  const totalAnnual = energyCost + staffCost + maintCost + infraCost + leasingCost + depotCost + cleaningCost + insuranceCost;
+
+  // Tickets für Kostendeckung
+  const ticketsYear = ticketPrice > 0 ? totalAnnual / ticketPrice : 0;
+  const ticketsDay = ticketsYear / 365;
+
+  document.getElementById('result').innerHTML = `
+  <div class="card">
+    <h3>Ergebnis</h3>
+    <table>
+      <tr><td>Einweg-Fahrten / Tag (gesamt)</td><td class="right">${fmt(oneWayTripsPerDay)}</td></tr>
+      <tr><td>Jährliche Zug-km</td><td class="right">${fmt(annualTrainKm)} km</td></tr>
+      <tr><td>Benötigte Zugsets (inkl. ${sparePct}% Reserve)</td><td class="right big">${fmt(totalTrains)}</td></tr>
+    </table>
+
+    <h4 style="margin-top:12px">Jahreskosten (NOK)</h4>
+    <table>
+      <tr><td>Energie</td><td class="right">${fmt(energyCost)}</td></tr>
+      <tr><td>Personal</td><td class="right">${fmt(staffCost)}</td></tr>
+      <tr><td>Wartung</td><td class="right">${fmt(maintCost)}</td></tr>
+      <tr><td>Infrastruktur</td><td class="right">${fmt(infraCost)}</td></tr>
+      <tr><td>Leasing</td><td class="right">${fmt(leasingCost)}</td></tr>
+      <tr><td>Depot</td><td class="right">${fmt(depotCost)}</td></tr>
+      <tr><td>Reinigung</td><td class="right">${fmt(cleaningCost)}</td></tr>
+      <tr><td>Versicherung</td><td class="right">${fmt(insuranceCost)}</td></tr>
+      <tr><th>Total</th><th class="right big">${fmt(totalAnnual)} NOK</th></tr>
+    </table>
+
+    <h4 style="margin-top:12px">Tickets für Kostendeckung</h4>
+    <table>
+      <tr><td>Ticketpreis</td><td class="right">${fmt(ticketPrice)} NOK</td></tr>
+      <tr><td>Benötigte Tickets / Jahr</td><td class="right big">${fmt(ticketsYear)}</td></tr>
+      <tr><td>Benötigte Tickets / Tag</td><td class="right">${fmt(ticketsDay)}</td></tr>
+    </table>
+  </div>`;
+}
+
+document.getElementById('calcBtn').addEventListener('click', calculate);
+</script>
+</body>
+</html>
