@@ -72,11 +72,11 @@ async function loadNetworkForBBox() {
   const query = `
 [out:json][timeout:60];
 (
-  way["railway"="rail"](${s},${w},${n},${e});
+  way["railway"~"^(rail|construction|proposed)$"](${s},${w},${n},${e});
 );
 (._;>;);
 out body;
-  `.trim();
+`.trim();
   const res = await fetch("https://overpass-api.de/api/interpreter", {
     method: "POST", body: query, headers: {"Content-Type": "text/plain"}
   });
@@ -353,3 +353,4 @@ function downloadRouteAsGeoJSON() {
 </script>
 </body>
 </html>
+
