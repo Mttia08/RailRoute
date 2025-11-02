@@ -113,8 +113,22 @@ function buildGraphFromOverpass(data) {
       const ca = nodes.get(a), cb = nodes.get(b);
       if (!ca || !cb) continue;
       const d = haversine(ca.lat, ca.lon, cb.lat, cb.lon);
-      const edge = {to: b, w: d, tags: way.tags};
-      const edgeBack = {to: a, w: d, tags: way.tags};
+      // helper: liest Speed in km/h
+      function getSpeedKMH(tags) {
+        let s = tags && (tags.maxspeed || tags["maxspeed:forward"] || tags["maxspeed:backward"]);
+        if (!s) return 80; // default km/h
+        const m = String(s).match(/\d+/);
+        return m ? parseInt(m[0], 10) : 80;
+      }
+
+      // innerhalb der Schleife, nachdem d berechnet ist:
+      const speedKMH = getSpeedKMH(way.tags);
+      const speedMS = speedKMH / 3.6; // m/s
+      const timeSeconds = d / (speedMS || 1); // s, fallback
+
+      // Speichere sowohl dist (m) als auch w (s)
+      const edge = { to: b, w: timeSeconds, dist: d, tags: way.tags };
+      const edgeBack = { to: a, w: timeSeconds, dist: d, tags: way.tags };
       adj.get(a).push(edge);
       adj.get(b).push(edgeBack);
     }
@@ -174,7 +188,7 @@ function dijkstra(sourceId, targetId) {
   path.push(cur);
   while (cur !== sourceId) {
     const p = prev.get(cur); if (!p) break;
-    edges.push({from: p.u, to: cur, tags: p.edge.tags, dist: p.edge.w});
+    edges.push({from: p.u, to: cur, tags: p.edge.tags, dist: p.edge.dist, time: p.edge.w});
     cur = p.u; path.push(cur);
   }
   path.reverse(); edges.reverse();
@@ -353,4 +367,5 @@ function downloadRouteAsGeoJSON() {
 </script>
 </body>
 </html>
+
 
