@@ -297,7 +297,7 @@ function computeTravelTime(edges) {
     const vN = feats[i].maxspeed_normal;
     if (vN) {
         // Berechnung: v = sqrt(v_normal^2 + (ΔI * R / 11.8))
-        const vNZ = Math.sqrt(vN*vN + ((I_tilting - I_normal) * R / 11.8));
+        const vNZ = Math.sqrt(vN*vN + ((I_tilting - I_normal) * R * 11.8));
         feats[i].maxspeed_tilting = vNZ;  // Überschreibt OSM
     }
   }
@@ -367,6 +367,7 @@ function downloadRouteAsGeoJSON() {
 </script>
 </body>
 </html>
+
 
 
 
