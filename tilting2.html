@@ -45,7 +45,7 @@ const trainLength = 200;   // m
 const accel = 0.5;         // m/s²
 const decel = 0.7;         // m/s²
 const I_normal = 150;       // mm, Fehlbetrag Normalzug
-const I_tilting = 200;     // mm, Fehlbetrag Neigezug
+const I_tilting = 180;     // mm, Fehlbetrag Neigezug
 
 const map = L.map('map').setView([46.76, 7.62], 11);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -367,6 +367,7 @@ function downloadRouteAsGeoJSON() {
 </script>
 </body>
 </html>
+
 
 
 
