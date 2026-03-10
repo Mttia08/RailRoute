@@ -45,7 +45,7 @@ const trainLength = 200;   // m
 const accel = 0.5;         // m/s²
 const decel = 0.7;         // m/s²
 const I_normal = 150;       // mm, Fehlbetrag Normalzug
-const I_tilting = 280;     // mm, Fehlbetrag Neigezug
+const I_tilting = 200;     // mm, Fehlbetrag Neigezug
 
 const map = L.map('map').setView([46.76, 7.62], 11);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -297,7 +297,7 @@ function computeTravelTime(edges) {
     const vN = feats[i].maxspeed_normal;
     if (vN) {
         // Berechnung: v = sqrt(v_normal^2 + (ΔI * R / 11.8))
-        const vNZ = Math.sqrt(vN*vN + ((I_tilting - I_normal) * R * 11.8));
+        const vNZ = Math.sqrt(vN*vN + ((I_tilting - I_normal) * R / 11.8));
         feats[i].maxspeed_tilting = vNZ;  // Überschreibt OSM
     }
   }
@@ -367,6 +367,7 @@ function downloadRouteAsGeoJSON() {
 </script>
 </body>
 </html>
+
 
 
 
