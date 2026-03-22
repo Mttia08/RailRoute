@@ -69,7 +69,7 @@ map.on('click', async (e) => {
         const duration = route.duration;
 
         document.getElementById("info").innerHTML =
-            "Fahrzeit: " + Math.floor(duration/60) + ":" + (duration % 60).toFixed(2) + " (" + Math.floor((duration* 1.2)/60) + ":" + ((duration* 1.2) % 60).toFixed(2) + ")"
+            "Fahrzeit: " + Math.floor(duration/60) + ":" + (duration % 60).toFixed(0).toString().padStart(2, "0") + " (" + Math.floor((duration* 1.2)/60) + ":" + ((duration* 1.2) % 60).toFixed(0).toString().padStart(2, "0") + ")"
 
         // Route anzeigen
         routeLayer = L.geoJSON(route.geometry).addTo(map);
